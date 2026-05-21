@@ -70,31 +70,40 @@ function createTeams(players) {
   return teams;
 }
 
-function createRoundRobinMatches(groupName, teams) {
-  const matches = [];
+function createRoundRobinRounds(teams) {
+  const participants = [...teams];
 
-  for (let i = 0; i < teams.length; i++) {
-    for (let j = i + 1; j < teams.length; j++) {
-      matches.push({
-        id: makeId("match"),
-        day: "Day 1",
-        stage: "GROUP",
-        groupName,
-        roundIndex: 0,
-        team1Id: teams[i].id,
-        team2Id: teams[j].id,
-        score1: "",
-        score2: "",
-        winnerId: null,
-        isComplete: false,
-      });
-    }
+  if (participants.length % 2 !== 0) {
+    participants.push(null);
   }
 
-  return matches;
+  const rounds = [];
+  const totalRounds = participants.length - 1;
+
+  for (let roundIndex = 0; roundIndex < totalRounds; roundIndex++) {
+    const roundPairs = [];
+
+    for (let i = 0; i < participants.length / 2; i++) {
+      const team1 = participants[i];
+      const team2 = participants[participants.length - 1 - i];
+
+      if (team1 && team2) {
+        roundPairs.push({ team1, team2 });
+      }
+    }
+
+    rounds.push(roundPairs);
+
+    const fixed = participants[0];
+    const rotating = participants.slice(1);
+    rotating.unshift(rotating.pop());
+    participants.splice(0, participants.length, fixed, ...rotating);
+  }
+
+  return rounds;
 }
 
-function createGroupTournament(teams) {
+function createGroupTournament(teams, courtCount = 2) {
   const groupASize = Math.ceil(teams.length / 2);
   const groupA = teams.slice(0, groupASize);
   const groupB = teams.slice(groupASize);
@@ -104,10 +113,49 @@ function createGroupTournament(teams) {
     { name: "Group B", teamIds: groupB.map((team) => team.id) },
   ];
 
-  const matches = [
-    ...createRoundRobinMatches("Group A", groupA),
-    ...createRoundRobinMatches("Group B", groupB),
-  ];
+  const groupARounds = createRoundRobinRounds(groupA);
+  const groupBRounds = createRoundRobinRounds(groupB);
+
+  const maxRounds = Math.max(groupARounds.length, groupBRounds.length);
+  const matches = [];
+  let timeSlot = 1;
+
+  for (let roundIndex = 0; roundIndex < maxRounds; roundIndex++) {
+    const roundMatches = [
+      ...(groupARounds[roundIndex] || []).map((pair) => ({
+        ...pair,
+        groupName: "Group A",
+      })),
+      ...(groupBRounds[roundIndex] || []).map((pair) => ({
+        ...pair,
+        groupName: "Group B",
+      })),
+    ];
+
+    for (let i = 0; i < roundMatches.length; i += courtCount) {
+      const courtBatch = roundMatches.slice(i, i + courtCount);
+
+      courtBatch.forEach((pair, courtIndex) => {
+        matches.push({
+          id: makeId("match"),
+          day: "Day 1",
+          stage: "GROUP",
+          groupName: pair.groupName,
+          roundIndex,
+          timeSlot,
+          courtNumber: courtIndex + 1,
+          team1Id: pair.team1.id,
+          team2Id: pair.team2.id,
+          score1: "",
+          score2: "",
+          winnerId: null,
+          isComplete: false,
+        });
+      });
+
+      timeSlot += 1;
+    }
+  }
 
   return { groups, matches };
 }
@@ -407,12 +455,13 @@ function App() {
   const [tournaments, setTournaments] = useState(() => loadSavedTournaments());
   const [activeTournamentId, setActiveTournamentId] = useState(null);
 
-  const [setup, setSetup] = useState({
-    name: "Saturday Pickleball",
-    format: "GROUP_STAGE_KNOCKOUT",
-    playersText: "",
-    matchPoint: 11,
-  });
+const [setup, setSetup] = useState({
+  name: "Saturday Pickleball",
+  format: "GROUP_STAGE_KNOCKOUT",
+  playersText: "",
+  matchPoint: 11,
+  courtCount: 2,
+});
 
   useEffect(() => {
     saveTournaments(tournaments);
@@ -477,7 +526,7 @@ function App() {
     let generatedMatches = [];
 
     if (setup.format === "GROUP_STAGE_KNOCKOUT") {
-      const result = createGroupTournament(generatedTeams);
+      const result = createGroupTournament(generatedTeams, setup.courtCount);
       generatedGroups = result.groups;
       generatedMatches = result.matches;
     } else {
@@ -489,6 +538,7 @@ function App() {
       name: setup.name || "Pickleball Tournament",
       format: setup.format,
       matchPoint: setup.matchPoint,
+      courtCount: setup.courtCount,
       players,
       teams: generatedTeams,
       groups: generatedGroups,
@@ -505,6 +555,7 @@ function App() {
       format: "GROUP_STAGE_KNOCKOUT",
       playersText: "",
       matchPoint: 11,
+      courtCount: 2,
     });
   }
 
@@ -655,6 +706,23 @@ function App() {
                   <option value={7}>7</option>
                   <option value={11}>11</option>
                   <option value={15}>15</option>
+                </select>
+              </label>
+
+              <label>
+                Number of Courts
+                <select
+                  value={setup.courtCount}
+                  onChange={(event) =>
+                    setSetup({
+                      ...setup,
+                      courtCount: Number(event.target.value),
+                    })
+                  }
+                >
+                  <option value={1}>1 Court</option>
+                  <option value={2}>2 Courts</option>
+                  <option value={3}>3 Courts</option>
                 </select>
               </label>
 
