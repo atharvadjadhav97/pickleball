@@ -1,7 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 import "./App.css";
 
-const STORAGE_KEY = "pickleball_tournament_v1";
+const STORAGE_KEY = "pickleball_tournaments_v2";
+
+function loadSavedTournaments() {
+  const saved = localStorage.getItem(STORAGE_KEY);
+  return saved ? JSON.parse(saved) : [];
+}
+
+function saveTournaments(tournaments) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(tournaments));
+}
 
 function shuffleArray(array) {
   const copy = [...array];
@@ -247,7 +256,6 @@ function createGroupPlayoffs(groups, teams, matches) {
   if (hasSemifinals) return matches;
 
   if (!areGroupMatchesComplete(matches)) return matches;
-
   if (groups.length < 2) return matches;
 
   const groupAStandings = calculateStandings(groups[0], teams, matches);
@@ -367,11 +375,37 @@ function createNextKnockoutRoundIfReady(matches, initialTeamCount) {
   return [...matches, ...nextRound];
 }
 
+function getTournamentWinner(tournament) {
+  if (!tournament) return null;
+
+  const teams = tournament.teams || [];
+  const matches = tournament.matches || [];
+
+  if (tournament.format === "GROUP_STAGE_KNOCKOUT") {
+    const finalMatch = matches.find((match) => match.stage === "FINAL");
+    return finalMatch?.winnerId ? getTeamName(teams, finalMatch.winnerId) : null;
+  }
+
+  const knockoutMatches = matches.filter((match) => match.stage === "KNOCKOUT");
+  if (knockoutMatches.length === 0) return null;
+
+  const maxRound = Math.max(...knockoutMatches.map((match) => match.roundIndex));
+  const finalRound = knockoutMatches.filter((match) => match.roundIndex === maxRound);
+
+  if (finalRound.length === 1 && finalRound[0].isComplete && finalRound[0].winnerId) {
+    return getTeamName(teams, finalRound[0].winnerId);
+  }
+
+  return null;
+}
+
+function getCompletedMatchCount(tournament) {
+  return tournament.matches.filter((match) => match.isComplete && !match.isBye).length;
+}
+
 function App() {
-  const [tournament, setTournament] = useState(() => {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    return saved ? JSON.parse(saved) : null;
-  });
+  const [tournaments, setTournaments] = useState(() => loadSavedTournaments());
+  const [activeTournamentId, setActiveTournamentId] = useState(null);
 
   const [setup, setSetup] = useState({
     name: "Saturday Pickleball",
@@ -381,35 +415,38 @@ function App() {
   });
 
   useEffect(() => {
-    if (tournament) {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(tournament));
-    }
-  }, [tournament]);
+    saveTournaments(tournaments);
+  }, [tournaments]);
 
-  const teams = tournament?.teams || [];
-  const matches = tournament?.matches || [];
-  const groups = tournament?.groups || [];
+  const activeTournament = useMemo(
+    () => tournaments.find((item) => item.id === activeTournamentId) || null,
+    [tournaments, activeTournamentId]
+  );
 
-  const winner = useMemo(() => {
-    if (!tournament) return null;
+  const teams = activeTournament?.teams || [];
+  const matches = activeTournament?.matches || [];
+  const groups = activeTournament?.groups || [];
 
-    if (tournament.format === "GROUP_STAGE_KNOCKOUT") {
-      const finalMatch = matches.find((match) => match.stage === "FINAL");
-      return finalMatch?.winnerId ? getTeamName(teams, finalMatch.winnerId) : null;
-    }
+  const winner = useMemo(
+    () => getTournamentWinner(activeTournament),
+    [activeTournament]
+  );
 
-    const knockoutMatches = matches.filter((match) => match.stage === "KNOCKOUT");
-    if (knockoutMatches.length === 0) return null;
+  function updateActiveTournament(updater) {
+    setTournaments((currentTournaments) =>
+      currentTournaments.map((tournament) => {
+        if (tournament.id !== activeTournamentId) return tournament;
 
-    const maxRound = Math.max(...knockoutMatches.map((match) => match.roundIndex));
-    const finalRound = knockoutMatches.filter((match) => match.roundIndex === maxRound);
+        const updatedTournament =
+          typeof updater === "function" ? updater(tournament) : updater;
 
-    if (finalRound.length === 1 && finalRound[0].isComplete && finalRound[0].winnerId) {
-      return getTeamName(teams, finalRound[0].winnerId);
-    }
-
-    return null;
-  }, [matches, teams, tournament]);
+        return {
+          ...updatedTournament,
+          updatedAt: new Date().toISOString(),
+        };
+      })
+    );
+  }
 
   function handleCreateTournament(event) {
     event.preventDefault();
@@ -431,6 +468,11 @@ function App() {
 
     const generatedTeams = createTeams(players);
 
+    if (setup.format === "GROUP_STAGE_KNOCKOUT" && generatedTeams.length < 4) {
+      alert("Group Stage + Knockout needs at least 8 players / 4 teams. Use Direct Knockout for fewer players.");
+      return;
+    }
+
     let generatedGroups = [];
     let generatedMatches = [];
 
@@ -442,7 +484,7 @@ function App() {
       generatedMatches = createKnockoutFirstRound(generatedTeams);
     }
 
-    setTournament({
+    const newTournament = {
       id: makeId("tournament"),
       name: setup.name || "Pickleball Tournament",
       format: setup.format,
@@ -452,11 +494,22 @@ function App() {
       groups: generatedGroups,
       matches: generatedMatches,
       createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    setTournaments((current) => [newTournament, ...current]);
+    setActiveTournamentId(newTournament.id);
+
+    setSetup({
+      name: "Saturday Pickleball",
+      format: "GROUP_STAGE_KNOCKOUT",
+      playersText: "",
+      matchPoint: 11,
     });
   }
 
   function updateMatchScore(matchId, field, value) {
-    setTournament((current) => {
+    updateActiveTournament((current) => {
       const updatedMatches = current.matches.map((match) => {
         if (match.id !== matchId) return match;
 
@@ -493,25 +546,28 @@ function App() {
     });
   }
 
-  function resetTournament() {
-    const confirmed = window.confirm("Reset tournament? This will delete saved data.");
+  function deleteTournament(tournamentId) {
+    const confirmed = window.confirm("Delete this tournament?");
     if (!confirmed) return;
 
-    localStorage.removeItem(STORAGE_KEY);
-    setTournament(null);
+    setTournaments((current) => current.filter((item) => item.id !== tournamentId));
+
+    if (activeTournamentId === tournamentId) {
+      setActiveTournamentId(null);
+    }
   }
 
-  function exportTournament() {
-    if (!tournament) return;
+  function exportTournament(tournamentToExport = activeTournament) {
+    if (!tournamentToExport) return;
 
-    const file = new Blob([JSON.stringify(tournament, null, 2)], {
+    const file = new Blob([JSON.stringify(tournamentToExport, null, 2)], {
       type: "application/json",
     });
 
     const url = URL.createObjectURL(file);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `${tournament.name.replaceAll(" ", "_")}.json`;
+    link.download = `${tournamentToExport.name.replaceAll(" ", "_")}.json`;
     link.click();
     URL.revokeObjectURL(url);
   }
@@ -525,87 +581,175 @@ function App() {
     reader.onload = () => {
       try {
         const imported = JSON.parse(reader.result);
-        setTournament(imported);
+        const importedTournament = {
+          ...imported,
+          id: imported.id || makeId("tournament"),
+          updatedAt: new Date().toISOString(),
+        };
+
+        setTournaments((current) => [importedTournament, ...current]);
+        setActiveTournamentId(importedTournament.id);
       } catch {
         alert("Invalid tournament file.");
       }
     };
 
     reader.readAsText(file);
+    event.target.value = "";
   }
 
-  if (!tournament) {
+  if (!activeTournament) {
     return (
       <main className="page">
         <section className="card hero-card">
           <p className="eyebrow">Pickleball Utility</p>
-          <h1>Tournament Generator</h1>
+          <h1>Tournament Dashboard</h1>
           <p className="muted">
-            Create doubles teams, generate group-stage or knockout schedules,
-            enter scores, and continue later from the same browser.
+            Create multiple tournaments, open old tournaments, enter scores, and
+            keep everything saved in this browser.
           </p>
         </section>
 
-        <section className="card">
-          <h2>Create Tournament</h2>
+        <section className="grid two-col dashboard-grid">
+          <section className="card">
+            <h2>Create New Tournament</h2>
 
-          <form onSubmit={handleCreateTournament} className="setup-form">
-            <label>
-              Tournament Name
-              <input
-                value={setup.name}
-                onChange={(event) =>
-                  setSetup({ ...setup, name: event.target.value })
-                }
-                placeholder="Saturday Pickleball"
-              />
-            </label>
+            <form onSubmit={handleCreateTournament} className="setup-form">
+              <label>
+                Tournament Name
+                <input
+                  value={setup.name}
+                  onChange={(event) =>
+                    setSetup({ ...setup, name: event.target.value })
+                  }
+                  placeholder="Saturday Pickleball"
+                />
+              </label>
 
-            <label>
-              Tournament Format
-              <select
-                value={setup.format}
-                onChange={(event) =>
-                  setSetup({ ...setup, format: event.target.value })
-                }
-              >
-                <option value="GROUP_STAGE_KNOCKOUT">
-                  Group Stage + Knockout
-                </option>
-                <option value="DIRECT_KNOCKOUT">Direct Knockout</option>
-              </select>
-            </label>
+              <label>
+                Tournament Format
+                <select
+                  value={setup.format}
+                  onChange={(event) =>
+                    setSetup({ ...setup, format: event.target.value })
+                  }
+                >
+                  <option value="GROUP_STAGE_KNOCKOUT">
+                    Group Stage + Knockout
+                  </option>
+                  <option value="DIRECT_KNOCKOUT">Direct Knockout</option>
+                </select>
+              </label>
 
-            <label>
-              Match Point
-              <select
-                value={setup.matchPoint}
-                onChange={(event) =>
-                  setSetup({ ...setup, matchPoint: Number(event.target.value) })
-                }
-              >
-                <option value={7}>7</option>
-                <option value={11}>11</option>
-                <option value={15}>15</option>
-              </select>
-            </label>
+              <label>
+                Match Point
+                <select
+                  value={setup.matchPoint}
+                  onChange={(event) =>
+                    setSetup({
+                      ...setup,
+                      matchPoint: Number(event.target.value),
+                    })
+                  }
+                >
+                  <option value={7}>7</option>
+                  <option value={11}>11</option>
+                  <option value={15}>15</option>
+                </select>
+              </label>
 
-            <label>
-              Player Names
-              <textarea
-                value={setup.playersText}
-                onChange={(event) =>
-                  setSetup({ ...setup, playersText: event.target.value })
-                }
-                placeholder={`Enter one player per line:\nAtharva\nRahul\nJay\nVishal`}
-                rows={12}
-              />
-            </label>
+              <label>
+                Player Names
+                <textarea
+                  value={setup.playersText}
+                  onChange={(event) =>
+                    setSetup({ ...setup, playersText: event.target.value })
+                  }
+                  placeholder={`Enter one player per line:\nAtharva\nRahul\nJay\nVishal`}
+                  rows={12}
+                />
+              </label>
 
-            <button type="submit" className="primary-button">
-              Generate Tournament
-            </button>
-          </form>
+              <button type="submit" className="primary-button">
+                Generate Tournament
+              </button>
+            </form>
+          </section>
+
+          <section className="card">
+            <div className="section-header">
+              <div>
+                <h2>Saved Tournaments</h2>
+                <p className="muted small-note">
+                  Stored locally in this browser for now.
+                </p>
+              </div>
+
+              <label className="secondary-button file-button compact-button">
+                Import
+                <input
+                  type="file"
+                  accept="application/json"
+                  onChange={importTournament}
+                />
+              </label>
+            </div>
+
+            {tournaments.length === 0 ? (
+              <div className="empty-state">
+                <p>No saved tournaments yet.</p>
+                <p className="muted">Create one from the form on the left.</p>
+              </div>
+            ) : (
+              <div className="saved-list">
+                {tournaments.map((tournament) => {
+                  const tournamentWinner = getTournamentWinner(tournament);
+                  const completedMatches = getCompletedMatchCount(tournament);
+
+                  return (
+                    <div className="saved-card" key={tournament.id}>
+                      <div>
+                        <h3>{tournament.name}</h3>
+                        <p className="muted">
+                          {tournament.format === "GROUP_STAGE_KNOCKOUT"
+                            ? "Group Stage + Knockout"
+                            : "Direct Knockout"}{" "}
+                          · {tournament.teams.length} teams ·{" "}
+                          {completedMatches}/{tournament.matches.length} matches
+                          completed
+                        </p>
+
+                        {tournamentWinner && (
+                          <p className="winner-mini">🏆 {tournamentWinner}</p>
+                        )}
+                      </div>
+
+                      <div className="saved-actions">
+                        <button
+                          className="primary-button compact-button"
+                          onClick={() => setActiveTournamentId(tournament.id)}
+                        >
+                          Open
+                        </button>
+                        <button
+                          className="secondary-button compact-button"
+                          onClick={() => exportTournament(tournament)}
+                        >
+                          Export
+                        </button>
+                        <button
+                          className="danger-button compact-button"
+                          onClick={() => deleteTournament(tournament.id)}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </section>
         </section>
       </main>
     );
@@ -617,28 +761,36 @@ function App() {
         <div className="top-row">
           <div>
             <p className="eyebrow">Active Tournament</p>
-            <h1>{tournament.name}</h1>
+            <h1>{activeTournament.name}</h1>
             <p className="muted">
               Format:{" "}
-              {tournament.format === "GROUP_STAGE_KNOCKOUT"
+              {activeTournament.format === "GROUP_STAGE_KNOCKOUT"
                 ? "Group Stage + Knockout"
                 : "Direct Knockout"}{" "}
-              · Match Point: {tournament.matchPoint}
+              · Match Point: {activeTournament.matchPoint}
             </p>
           </div>
 
           <div className="actions">
-            <button onClick={exportTournament} className="secondary-button">
+            <button
+              onClick={() => setActiveTournamentId(null)}
+              className="secondary-button"
+            >
+              Dashboard
+            </button>
+
+            <button
+              onClick={() => exportTournament(activeTournament)}
+              className="secondary-button"
+            >
               Export
             </button>
 
-            <label className="secondary-button file-button">
-              Import
-              <input type="file" accept="application/json" onChange={importTournament} />
-            </label>
-
-            <button onClick={resetTournament} className="danger-button">
-              Reset
+            <button
+              onClick={() => deleteTournament(activeTournament.id)}
+              className="danger-button"
+            >
+              Delete
             </button>
           </div>
         </div>
@@ -663,7 +815,7 @@ function App() {
           </div>
         </section>
 
-        {tournament.format === "GROUP_STAGE_KNOCKOUT" && (
+        {activeTournament.format === "GROUP_STAGE_KNOCKOUT" && (
           <section className="card">
             <h2>Groups</h2>
             {groups.map((group) => (
@@ -678,7 +830,7 @@ function App() {
         )}
       </section>
 
-      {tournament.format === "GROUP_STAGE_KNOCKOUT" && (
+      {activeTournament.format === "GROUP_STAGE_KNOCKOUT" && (
         <section className="card">
           <h2>Standings</h2>
 
