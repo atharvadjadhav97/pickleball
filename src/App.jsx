@@ -103,7 +103,7 @@ function createRoundRobinRounds(teams) {
   return rounds;
 }
 
-function createGroupTournament(teams, courtCount = 2) {
+function createGroupTournament(teams, courtCount = 4) {
   const groupASize = Math.ceil(teams.length / 2);
   const groupA = teams.slice(0, groupASize);
   const groupB = teams.slice(groupASize);
@@ -460,7 +460,7 @@ const [setup, setSetup] = useState({
   format: "GROUP_STAGE_KNOCKOUT",
   playersText: "",
   matchPoint: 11,
-  courtCount: 2,
+  courtCount: 4,
 });
 
   useEffect(() => {
@@ -723,6 +723,7 @@ const [setup, setSetup] = useState({
                   <option value={1}>1 Court</option>
                   <option value={2}>2 Courts</option>
                   <option value={3}>3 Courts</option>
+                  <option value={4}>4 Courts</option>
                 </select>
               </label>
 
@@ -967,6 +968,8 @@ const [setup, setSetup] = useState({
                       ? match.roundName
                       : getStageLabel(match.stage)}
                     {match.groupName ? ` · ${match.groupName}` : ""}
+                    {match.timeSlot ? ` · Slot ${match.timeSlot}` : ""}
+                    {match.courtNumber ? ` · Court ${match.courtNumber}` : ""}
                   </p>
                 </div>
 
