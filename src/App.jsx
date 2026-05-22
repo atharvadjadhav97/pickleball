@@ -454,6 +454,8 @@ function getCompletedMatchCount(tournament) {
 function App() {
   const [tournaments, setTournaments] = useState(() => loadSavedTournaments());
   const [activeTournamentId, setActiveTournamentId] = useState(null);
+  const [scoreMode, setScoreMode] = useState(false);
+  const [showCompletedMatches, setShowCompletedMatches] = useState(false);
 
 const [setup, setSetup] = useState({
   name: "Saturday Pickleball",
@@ -596,6 +598,26 @@ const [setup, setSetup] = useState({
       };
     });
   }
+
+  function changeScoreBy(match, field, delta) {
+    const currentValue = Number(match[field] || 0);
+    const nextValue = Math.max(0, currentValue + delta);
+
+    updateMatchScore(match.id, field, String(nextValue));
+  }
+
+  function getVisibleMatches() {
+    if (!scoreMode) return matches;
+
+    const pendingMatches = matches.filter((match) => !match.isComplete);
+    const completedMatches = matches.filter((match) => match.isComplete);
+
+    if (showCompletedMatches) {
+      return [...pendingMatches, ...completedMatches];
+    }
+
+    return pendingMatches;
+}
 
   function deleteTournament(tournamentId) {
     const confirmed = window.confirm("Delete this tournament?");
@@ -849,6 +871,13 @@ const [setup, setSetup] = useState({
             </button>
 
             <button
+              onClick={() => setScoreMode((current) => !current)}
+              className={scoreMode ? "primary-button" : "secondary-button"}
+            >
+              {scoreMode ? "Full View" : "Score Mode"}
+            </button>
+
+            <button
               onClick={() => exportTournament(activeTournament)}
               className="secondary-button"
             >
@@ -955,13 +984,34 @@ const [setup, setSetup] = useState({
 
       <section className="card">
         <h2>Matches</h2>
+        {scoreMode && (
+          <div className="score-mode-bar">
+            <div>
+              <strong>Score Mode</strong>
+              <p className="muted small-note">
+                Showing pending matches first for quick phone scoring.
+              </p>
+            </div>
+
+            <button
+              className="secondary-button compact-button"
+              onClick={() => setShowCompletedMatches((current) => !current)}
+            >
+              {showCompletedMatches ? "Hide Completed" : "Show Completed"}
+            </button>
+          </div>
+        )}
 
         <div className="match-list">
-          {matches.map((match, index) => (
+          {getVisibleMatches().map((match, index) => (
             <div className="match-card" key={match.id}>
               <div className="match-header">
                 <div>
-                  <strong>Match {index + 1}</strong>
+                  <strong>
+                    {scoreMode && match.timeSlot
+                      ? `Slot ${match.timeSlot} · Court ${match.courtNumber || "-"}`
+                      : `Match ${index + 1}`}
+                  </strong>
                   <p>
                     {match.day} ·{" "}
                     {match.stage === "KNOCKOUT"
@@ -980,22 +1030,80 @@ const [setup, setSetup] = useState({
                 )}
               </div>
 
-              <div className="score-row">
+              <div className={scoreMode ? "mobile-score-row" : "score-row"}>
                 <div className="team-name">{getTeamName(teams, match.team1Id)}</div>
 
-                <input
-                  type="number"
-                  value={match.score1}
-                  disabled={match.isBye || !match.team1Id || !match.team2Id}
-                  onChange={(event) =>
-                    updateMatchScore(match.id, "score1", event.target.value)
-                  }
-                />
+                {scoreMode ? (
+                  <div className="score-controls">
+                    <button
+                      type="button"
+                      disabled={match.isBye || !match.team1Id || !match.team2Id}
+                      onClick={() => changeScoreBy(match, "score1", -1)}
+                    >
+                      −
+                    </button>
+
+                    <input
+                      type="number"
+                      value={match.score1}
+                      disabled={match.isBye || !match.team1Id || !match.team2Id}
+                      onChange={(event) =>
+                        updateMatchScore(match.id, "score1", event.target.value)
+                      }
+                    />
+
+                    <button
+                      type="button"
+                      disabled={match.isBye || !match.team1Id || !match.team2Id}
+                      onClick={() => changeScoreBy(match, "score1", 1)}
+                    >
+                      +
+                    </button>
+                  </div>
+                ) : (
+                  <input
+                    type="number"
+                    value={match.score1}
+                    disabled={match.isBye || !match.team1Id || !match.team2Id}
+                    onChange={(event) =>
+                      updateMatchScore(match.id, "score1", event.target.value)
+                    }
+                  />
+                )}
               </div>
 
-              <div className="score-row">
-                <div className="team-name">{getTeamName(teams, match.team2Id)}</div>
 
+            <div className={scoreMode ? "mobile-score-row" : "score-row"}>
+              <div className="team-name">{getTeamName(teams, match.team2Id)}</div>
+
+              {scoreMode ? (
+                <div className="score-controls">
+                  <button
+                    type="button"
+                    disabled={match.isBye || !match.team1Id || !match.team2Id}
+                    onClick={() => changeScoreBy(match, "score2", -1)}
+                  >
+                    −
+                  </button>
+
+                  <input
+                    type="number"
+                    value={match.score2}
+                    disabled={match.isBye || !match.team1Id || !match.team2Id}
+                    onChange={(event) =>
+                      updateMatchScore(match.id, "score2", event.target.value)
+                    }
+                  />
+
+                  <button
+                    type="button"
+                    disabled={match.isBye || !match.team1Id || !match.team2Id}
+                    onClick={() => changeScoreBy(match, "score2", 1)}
+                  >
+                    +
+                  </button>
+                </div>
+              ) : (
                 <input
                   type="number"
                   value={match.score2}
@@ -1004,7 +1112,8 @@ const [setup, setSetup] = useState({
                     updateMatchScore(match.id, "score2", event.target.value)
                   }
                 />
-              </div>
+              )}
+            </div>
 
               {match.winnerId && (
                 <p className="winner-line">
