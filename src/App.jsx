@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import "./App.css";
 
+import {
+  createTournamentInDb,
+  loadTournamentFromDb,
+  updateTournamentInDb,
+} from "./lib/tournamentStore";
+
 const STORAGE_KEY = "pickleball_tournaments_v2";
 
 function loadSavedTournaments() {
@@ -14,10 +20,12 @@ function saveTournaments(tournaments) {
 
 function shuffleArray(array) {
   const copy = [...array];
+
   for (let i = copy.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     [copy[i], copy[j]] = [copy[j], copy[i]];
   }
+
   return copy;
 }
 
@@ -199,8 +207,10 @@ function createKnockoutFirstRound(teams) {
 
 function getTeamName(teams, teamId) {
   if (!teamId) return "TBD";
+
   const team = teams.find((item) => item.id === teamId);
   if (!team) return "TBD";
+
   return `${team.name}: ${team.players.join(" + ")}`;
 }
 
@@ -456,18 +466,72 @@ function App() {
   const [activeTournamentId, setActiveTournamentId] = useState(null);
   const [scoreMode, setScoreMode] = useState(false);
   const [showCompletedMatches, setShowCompletedMatches] = useState(false);
+  const [syncStatus, setSyncStatus] = useState("Local only");
+  const [isLoadingRemoteTournament, setIsLoadingRemoteTournament] = useState(false);
 
-const [setup, setSetup] = useState({
-  name: "Saturday Pickleball",
-  format: "GROUP_STAGE_KNOCKOUT",
-  playersText: "",
-  matchPoint: 11,
-  courtCount: 4,
-});
+  const [setup, setSetup] = useState({
+    name: "Saturday Pickleball",
+    format: "GROUP_STAGE_KNOCKOUT",
+    playersText: "",
+    matchPoint: 11,
+    courtCount: 4,
+  });
 
   useEffect(() => {
     saveTournaments(tournaments);
   }, [tournaments]);
+
+  useEffect(() => {
+    async function loadSharedTournament() {
+      const params = new URLSearchParams(window.location.search);
+      const remoteId = params.get("tournament");
+
+      if (!remoteId) return;
+
+      const alreadyLoaded = tournaments.some(
+        (tournament) => tournament.remoteId === remoteId
+      );
+
+      if (alreadyLoaded) {
+        const existingTournament = tournaments.find(
+          (tournament) => tournament.remoteId === remoteId
+        );
+        setActiveTournamentId(existingTournament.id);
+        return;
+      }
+
+      setIsLoadingRemoteTournament(true);
+      setSyncStatus("Loading shared tournament...");
+
+      const { data, error } = await loadTournamentFromDb(remoteId);
+
+      if (error) {
+        console.error(error);
+        setSyncStatus("Failed to load shared tournament");
+        setIsLoadingRemoteTournament(false);
+        return;
+      }
+
+      const remoteTournament = {
+        ...data.data,
+        remoteId: data.id,
+        updatedAt: data.updated_at,
+      };
+
+      setTournaments((current) => {
+        const exists = current.some((item) => item.remoteId === remoteId);
+        if (exists) return current;
+        return [remoteTournament, ...current];
+      });
+
+      setActiveTournamentId(remoteTournament.id);
+      setSyncStatus("Loaded from Supabase");
+      setIsLoadingRemoteTournament(false);
+    }
+
+    loadSharedTournament();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const activeTournament = useMemo(
     () => tournaments.find((item) => item.id === activeTournamentId) || null,
@@ -484,22 +548,62 @@ const [setup, setSetup] = useState({
   );
 
   function updateActiveTournament(updater) {
-    setTournaments((currentTournaments) =>
-      currentTournaments.map((tournament) => {
+    setTournaments((currentTournaments) => {
+      let tournamentToSync = null;
+
+      const nextTournaments = currentTournaments.map((tournament) => {
         if (tournament.id !== activeTournamentId) return tournament;
 
         const updatedTournament =
           typeof updater === "function" ? updater(tournament) : updater;
 
-        return {
+        tournamentToSync = {
           ...updatedTournament,
           updatedAt: new Date().toISOString(),
         };
-      })
-    );
+
+        return tournamentToSync;
+      });
+
+      if (tournamentToSync?.remoteId) {
+        setSyncStatus("Saving online...");
+
+        updateTournamentInDb(tournamentToSync).then(({ error }) => {
+          if (error) {
+            console.error(error);
+            setSyncStatus("Online save failed");
+          } else {
+            setSyncStatus("Saved online");
+          }
+        });
+      } else {
+        setSyncStatus("Local only");
+      }
+
+      return nextTournaments;
+    });
   }
 
-  function handleCreateTournament(event) {
+  function getShareLink(tournament) {
+    if (!tournament?.remoteId) return "";
+
+    const url = new URL(window.location.origin);
+    url.searchParams.set("tournament", tournament.remoteId);
+
+    return url.toString();
+  }
+
+  async function copyShareLink() {
+    if (!activeTournament?.remoteId) {
+      alert("This tournament is not saved online yet.");
+      return;
+    }
+
+    await navigator.clipboard.writeText(getShareLink(activeTournament));
+    alert("Tournament link copied.");
+  }
+
+  async function handleCreateTournament(event) {
     event.preventDefault();
 
     const players = setup.playersText
@@ -520,7 +624,9 @@ const [setup, setSetup] = useState({
     const generatedTeams = createTeams(players);
 
     if (setup.format === "GROUP_STAGE_KNOCKOUT" && generatedTeams.length < 4) {
-      alert("Group Stage + Knockout needs at least 8 players / 4 teams. Use Direct Knockout for fewer players.");
+      alert(
+        "Group Stage + Knockout needs at least 8 players / 4 teams. Use Direct Knockout for fewer players."
+      );
       return;
     }
 
@@ -551,13 +657,36 @@ const [setup, setSetup] = useState({
 
     setTournaments((current) => [newTournament, ...current]);
     setActiveTournamentId(newTournament.id);
+    setSyncStatus("Saving online...");
+
+    const { data, error } = await createTournamentInDb(newTournament);
+
+    if (error) {
+      console.error(error);
+      setSyncStatus("Saved locally only");
+    } else {
+      const tournamentWithRemoteId = {
+        ...newTournament,
+        remoteId: data.id,
+        updatedAt: data.updated_at,
+      };
+
+      setTournaments((current) =>
+        current.map((item) =>
+          item.id === newTournament.id ? tournamentWithRemoteId : item
+        )
+      );
+
+      setActiveTournamentId(tournamentWithRemoteId.id);
+      setSyncStatus("Saved online");
+    }
 
     setSetup({
       name: "Saturday Pickleball",
       format: "GROUP_STAGE_KNOCKOUT",
       playersText: "",
       matchPoint: 11,
-      courtCount: 2,
+      courtCount: 4,
     });
   }
 
@@ -617,7 +746,7 @@ const [setup, setSetup] = useState({
     }
 
     return pendingMatches;
-}
+  }
 
   function deleteTournament(tournamentId) {
     const confirmed = window.confirm("Delete this tournament?");
@@ -671,6 +800,18 @@ const [setup, setSetup] = useState({
     event.target.value = "";
   }
 
+  if (isLoadingRemoteTournament) {
+    return (
+      <main className="page">
+        <section className="card hero-card">
+          <p className="eyebrow">Pickleball Utility</p>
+          <h1>Loading tournament...</h1>
+          <p className="muted">Fetching shared tournament from Supabase.</p>
+        </section>
+      </main>
+    );
+  }
+
   if (!activeTournament) {
     return (
       <main className="page">
@@ -681,6 +822,7 @@ const [setup, setSetup] = useState({
             Create multiple tournaments, open old tournaments, enter scores, and
             keep everything saved in this browser.
           </p>
+          <p className="muted small-note">Sync: {syncStatus}</p>
         </section>
 
         <section className="grid two-col dashboard-grid">
@@ -772,7 +914,7 @@ const [setup, setSetup] = useState({
               <div>
                 <h2>Saved Tournaments</h2>
                 <p className="muted small-note">
-                  Stored locally in this browser for now.
+                  Stored locally in this browser. Online tournaments also have share links.
                 </p>
               </div>
 
@@ -808,6 +950,7 @@ const [setup, setSetup] = useState({
                           · {tournament.teams.length} teams ·{" "}
                           {completedMatches}/{tournament.matches.length} matches
                           completed
+                          {tournament.remoteId ? " · Online" : " · Local"}
                         </p>
 
                         {tournamentWinner && (
@@ -859,6 +1002,13 @@ const [setup, setSetup] = useState({
                 ? "Group Stage + Knockout"
                 : "Direct Knockout"}{" "}
               · Match Point: {activeTournament.matchPoint}
+              {activeTournament.courtCount
+                ? ` · Courts: ${activeTournament.courtCount}`
+                : ""}
+            </p>
+            <p className="muted small-note">
+              Sync: {syncStatus}
+              {activeTournament.remoteId ? " · Online tournament" : " · Local only"}
             </p>
           </div>
 
@@ -875,6 +1025,14 @@ const [setup, setSetup] = useState({
               className={scoreMode ? "primary-button" : "secondary-button"}
             >
               {scoreMode ? "Full View" : "Score Mode"}
+            </button>
+
+            <button
+              onClick={copyShareLink}
+              className="secondary-button"
+              disabled={!activeTournament.remoteId}
+            >
+              Share Link
             </button>
 
             <button
@@ -984,6 +1142,7 @@ const [setup, setSetup] = useState({
 
       <section className="card">
         <h2>Matches</h2>
+
         {scoreMode && (
           <div className="score-mode-bar">
             <div>
@@ -1072,20 +1231,37 @@ const [setup, setSetup] = useState({
                 )}
               </div>
 
+              <div className={scoreMode ? "mobile-score-row" : "score-row"}>
+                <div className="team-name">{getTeamName(teams, match.team2Id)}</div>
 
-            <div className={scoreMode ? "mobile-score-row" : "score-row"}>
-              <div className="team-name">{getTeamName(teams, match.team2Id)}</div>
+                {scoreMode ? (
+                  <div className="score-controls">
+                    <button
+                      type="button"
+                      disabled={match.isBye || !match.team1Id || !match.team2Id}
+                      onClick={() => changeScoreBy(match, "score2", -1)}
+                    >
+                      −
+                    </button>
 
-              {scoreMode ? (
-                <div className="score-controls">
-                  <button
-                    type="button"
-                    disabled={match.isBye || !match.team1Id || !match.team2Id}
-                    onClick={() => changeScoreBy(match, "score2", -1)}
-                  >
-                    −
-                  </button>
+                    <input
+                      type="number"
+                      value={match.score2}
+                      disabled={match.isBye || !match.team1Id || !match.team2Id}
+                      onChange={(event) =>
+                        updateMatchScore(match.id, "score2", event.target.value)
+                      }
+                    />
 
+                    <button
+                      type="button"
+                      disabled={match.isBye || !match.team1Id || !match.team2Id}
+                      onClick={() => changeScoreBy(match, "score2", 1)}
+                    >
+                      +
+                    </button>
+                  </div>
+                ) : (
                   <input
                     type="number"
                     value={match.score2}
@@ -1094,26 +1270,8 @@ const [setup, setSetup] = useState({
                       updateMatchScore(match.id, "score2", event.target.value)
                     }
                   />
-
-                  <button
-                    type="button"
-                    disabled={match.isBye || !match.team1Id || !match.team2Id}
-                    onClick={() => changeScoreBy(match, "score2", 1)}
-                  >
-                    +
-                  </button>
-                </div>
-              ) : (
-                <input
-                  type="number"
-                  value={match.score2}
-                  disabled={match.isBye || !match.team1Id || !match.team2Id}
-                  onChange={(event) =>
-                    updateMatchScore(match.id, "score2", event.target.value)
-                  }
-                />
-              )}
-            </div>
+                )}
+              </div>
 
               {match.winnerId && (
                 <p className="winner-line">
