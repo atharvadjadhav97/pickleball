@@ -583,11 +583,14 @@ function App() {
       return nextTournaments;
     });
   }
-
+  
   function getShareLink(tournament) {
     if (!tournament?.remoteId) return "";
 
-    const url = new URL(window.location.origin);
+    const publicAppUrl =
+      import.meta.env.VITE_PUBLIC_APP_URL || window.location.origin;
+
+    const url = new URL(publicAppUrl);
     url.searchParams.set("tournament", tournament.remoteId);
 
     return url.toString();
