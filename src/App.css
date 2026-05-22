@@ -389,3 +389,73 @@ th {
     width: 100%;
   }
 }
+
+.score-mode-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  margin-bottom: 18px;
+  border: 1px solid #dbeafe;
+  background: #eff6ff;
+  border-radius: 16px;
+}
+
+.mobile-score-row {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.score-controls {
+  display: grid;
+  grid-template-columns: 56px 1fr 56px;
+  gap: 10px;
+  align-items: center;
+}
+
+.score-controls button {
+  border: 0;
+  border-radius: 14px;
+  min-height: 48px;
+  font-size: 24px;
+  font-weight: 900;
+  cursor: pointer;
+  background: #e8eef5;
+  color: #17202a;
+}
+
+.score-controls button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.score-controls input {
+  min-height: 48px;
+  text-align: center;
+  font-size: 22px;
+  font-weight: 800;
+}
+
+@media (max-width: 800px) {
+  .score-mode-bar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .match-card {
+    padding: 14px;
+  }
+
+  .team-name {
+    font-size: 15px;
+    line-height: 1.4;
+  }
+
+  .winner-line {
+    font-size: 15px;
+    text-align: center;
+  }
+}
