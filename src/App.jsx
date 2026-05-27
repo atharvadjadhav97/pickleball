@@ -33,6 +33,28 @@ function makeId(prefix) {
   return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
 }
 
+function makeAdminToken() {
+  return crypto.randomUUID
+    ? crypto.randomUUID()
+    : `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
+function getStoredAdminTokens() {
+  const saved = localStorage.getItem("pickleball_admin_tokens_v1");
+  return saved ? JSON.parse(saved) : {};
+}
+
+function saveAdminToken(remoteId, adminToken) {
+  const tokens = getStoredAdminTokens();
+  tokens[remoteId] = adminToken;
+  localStorage.setItem("pickleball_admin_tokens_v1", JSON.stringify(tokens));
+}
+
+function hasStoredAdminToken(remoteId, adminToken) {
+  const tokens = getStoredAdminTokens();
+  return tokens[remoteId] === adminToken;
+}
+
 function getStageLabel(stage) {
   const labels = {
     GROUP: "Group Stage",
@@ -518,6 +540,11 @@ function App() {
         updatedAt: data.updated_at,
       };
 
+      const editToken = params.get("edit");
+
+        if (editToken && editToken === remoteTournament.adminToken) {
+          saveAdminToken(data.id, remoteTournament.adminToken);
+       }
       setTournaments((current) => {
         const exists = current.some((item) => item.remoteId === remoteId);
         if (exists) return current;
@@ -537,6 +564,26 @@ function App() {
     () => tournaments.find((item) => item.id === activeTournamentId) || null,
     [tournaments, activeTournamentId]
   );
+
+  const isAdmin = useMemo(() => {
+    if (!activeTournament) return false;
+
+    // Local-only tournaments can be edited.
+    if (!activeTournament.remoteId) return true;
+
+    const params = new URLSearchParams(window.location.search);
+    const tournamentIdFromUrl = params.get("tournament");
+    const editToken = params.get("edit");
+
+    // If this tournament was opened through a shared URL,
+    // require the edit token. No token = view-only.
+    if (tournamentIdFromUrl === activeTournament.remoteId) {
+      return Boolean(editToken && editToken === activeTournament.adminToken);
+    }
+
+    // If opened from your own dashboard/local saved list, allow edit.
+    return true;
+  }, [activeTournament]);
 
   const teams = activeTournament?.teams || [];
   const matches = activeTournament?.matches || [];
@@ -596,6 +643,19 @@ function App() {
     return url.toString();
   }
 
+  function getAdminLink(tournament) {
+    if (!tournament?.remoteId || !tournament?.adminToken) return "";
+
+    const publicAppUrl =
+      import.meta.env.VITE_PUBLIC_APP_URL || window.location.origin;
+
+    const url = new URL(publicAppUrl);
+    url.searchParams.set("tournament", tournament.remoteId);
+    url.searchParams.set("edit", tournament.adminToken);
+
+    return url.toString();
+  }
+
   async function copyShareLink() {
     if (!activeTournament?.remoteId) {
       alert("This tournament is not saved online yet.");
@@ -605,6 +665,16 @@ function App() {
     await navigator.clipboard.writeText(getShareLink(activeTournament));
     alert("Tournament link copied.");
   }
+
+  async function copyAdminLink() {
+    if (!activeTournament?.remoteId || !activeTournament?.adminToken) {
+      alert("Admin link is not available for this tournament.");
+      return;
+    }
+
+    await navigator.clipboard.writeText(getAdminLink(activeTournament));
+    alert("Admin edit link copied.");
+}
 
   async function handleCreateTournament(event) {
     event.preventDefault();
@@ -646,6 +716,7 @@ function App() {
 
     const newTournament = {
       id: makeId("tournament"),
+      adminToken: makeAdminToken(),
       name: setup.name || "Pickleball Tournament",
       format: setup.format,
       matchPoint: setup.matchPoint,
@@ -673,6 +744,7 @@ function App() {
         remoteId: data.id,
         updatedAt: data.updated_at,
       };
+      saveAdminToken(data.id, tournamentWithRemoteId.adminToken);
 
       setTournaments((current) =>
         current.map((item) =>
@@ -694,6 +766,11 @@ function App() {
   }
 
   function updateMatchScore(matchId, field, value) {
+
+    if (!isAdmin) {
+      alert("This is a view-only link. Use the admin link to edit scores.");
+      return;
+    }
     updateActiveTournament((current) => {
       const updatedMatches = current.matches.map((match) => {
         if (match.id !== matchId) return match;
@@ -1012,6 +1089,11 @@ function App() {
             <p className="muted small-note">
               Sync: {syncStatus}
               {activeTournament.remoteId ? " · Online tournament" : " · Local only"}
+              {activeTournament.remoteId
+                ? isAdmin
+                  ? " · Edit access"
+                  : " · View only"
+                : ""}
             </p>
           </div>
 
@@ -1037,6 +1119,14 @@ function App() {
             >
               Share Link
             </button>
+
+            <button
+              onClick={copyAdminLink}
+              className="secondary-button"
+              disabled={!activeTournament.remoteId || !isAdmin}
+            >
+              Admin Link
+          </button>
 
             <button
               onClick={() => exportTournament(activeTournament)}
@@ -1199,7 +1289,7 @@ function App() {
                   <div className="score-controls">
                     <button
                       type="button"
-                      disabled={match.isBye || !match.team1Id || !match.team2Id}
+                      disabled={!isAdmin || match.isBye || !match.team1Id || !match.team2Id}
                       onClick={() => changeScoreBy(match, "score1", -1)}
                     >
                       −
@@ -1208,7 +1298,7 @@ function App() {
                     <input
                       type="number"
                       value={match.score1}
-                      disabled={match.isBye || !match.team1Id || !match.team2Id}
+                      disabled={!isAdmin || match.isBye || !match.team1Id || !match.team2Id}
                       onChange={(event) =>
                         updateMatchScore(match.id, "score1", event.target.value)
                       }
@@ -1216,7 +1306,7 @@ function App() {
 
                     <button
                       type="button"
-                      disabled={match.isBye || !match.team1Id || !match.team2Id}
+                      disabled={!isAdmin || match.isBye || !match.team1Id || !match.team2Id}
                       onClick={() => changeScoreBy(match, "score1", 1)}
                     >
                       +
@@ -1226,7 +1316,7 @@ function App() {
                   <input
                     type="number"
                     value={match.score1}
-                    disabled={match.isBye || !match.team1Id || !match.team2Id}
+                    disabled={!isAdmin || match.isBye || !match.team1Id || !match.team2Id}
                     onChange={(event) =>
                       updateMatchScore(match.id, "score1", event.target.value)
                     }
@@ -1241,7 +1331,7 @@ function App() {
                   <div className="score-controls">
                     <button
                       type="button"
-                      disabled={match.isBye || !match.team1Id || !match.team2Id}
+                      disabled={!isAdmin || match.isBye || !match.team1Id || !match.team2Id}
                       onClick={() => changeScoreBy(match, "score2", -1)}
                     >
                       −
@@ -1250,7 +1340,7 @@ function App() {
                     <input
                       type="number"
                       value={match.score2}
-                      disabled={match.isBye || !match.team1Id || !match.team2Id}
+                      disabled={!isAdmin || match.isBye || !match.team1Id || !match.team2Id}
                       onChange={(event) =>
                         updateMatchScore(match.id, "score2", event.target.value)
                       }
@@ -1258,7 +1348,7 @@ function App() {
 
                     <button
                       type="button"
-                      disabled={match.isBye || !match.team1Id || !match.team2Id}
+                      disabled={!isAdmin || match.isBye || !match.team1Id || !match.team2Id}
                       onClick={() => changeScoreBy(match, "score2", 1)}
                     >
                       +
@@ -1268,7 +1358,7 @@ function App() {
                   <input
                     type="number"
                     value={match.score2}
-                    disabled={match.isBye || !match.team1Id || !match.team2Id}
+                    disabled={!isAdmin || match.isBye || !match.team1Id || !match.team2Id}
                     onChange={(event) =>
                       updateMatchScore(match.id, "score2", event.target.value)
                     }
