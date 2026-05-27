@@ -50,11 +50,6 @@ function saveAdminToken(remoteId, adminToken) {
   localStorage.setItem("pickleball_admin_tokens_v1", JSON.stringify(tokens));
 }
 
-function hasStoredAdminToken(remoteId, adminToken) {
-  const tokens = getStoredAdminTokens();
-  return tokens[remoteId] === adminToken;
-}
-
 function getStageLabel(stage) {
   const labels = {
     GROUP: "Group Stage",
@@ -234,17 +229,6 @@ function getTeamName(teams, teamId) {
   if (!team) return "TBD";
 
   return `${team.name}: ${team.players.join(" + ")}`;
-}
-
-function calculateWinner(match) {
-  const s1 = Number(match.score1);
-  const s2 = Number(match.score2);
-
-  if (Number.isNaN(s1) || Number.isNaN(s2)) return null;
-  if (s1 === s2) return null;
-  if (!match.team1Id || !match.team2Id) return null;
-
-  return s1 > s2 ? match.team1Id : match.team2Id;
 }
 
 function calculateStandings(group, teams, matches) {
@@ -512,20 +496,8 @@ function App() {
 
       if (!remoteId) return;
 
-      const alreadyLoaded = tournaments.some(
-        (tournament) => tournament.remoteId === remoteId
-      );
-
-      if (alreadyLoaded) {
-        const existingTournament = tournaments.find(
-          (tournament) => tournament.remoteId === remoteId
-        );
-        setActiveTournamentId(existingTournament.id);
-        return;
-      }
-
       setIsLoadingRemoteTournament(true);
-      setSyncStatus("Loading shared tournament...");
+      setSyncStatus("Loading latest tournament...");
 
       const { data, error } = await loadTournamentFromDb(remoteId);
 
@@ -544,17 +516,24 @@ function App() {
 
       const editToken = params.get("edit");
 
-        if (editToken && editToken === remoteTournament.adminToken) {
-          saveAdminToken(data.id, remoteTournament.adminToken);
-       }
+      if (editToken && editToken === remoteTournament.adminToken) {
+        saveAdminToken(data.id, remoteTournament.adminToken);
+      }
+
       setTournaments((current) => {
         const exists = current.some((item) => item.remoteId === remoteId);
-        if (exists) return current;
+
+        if (exists) {
+          return current.map((item) =>
+            item.remoteId === remoteId ? remoteTournament : item
+          );
+        }
+
         return [remoteTournament, ...current];
       });
 
       setActiveTournamentId(remoteTournament.id);
-      setSyncStatus("Loaded from Supabase");
+      setSyncStatus("Loaded latest from Supabase");
       setIsLoadingRemoteTournament(false);
     }
 
@@ -570,20 +549,16 @@ function App() {
   const isAdmin = useMemo(() => {
     if (!activeTournament) return false;
 
-    // Local-only tournaments can be edited.
     if (!activeTournament.remoteId) return true;
 
     const params = new URLSearchParams(window.location.search);
     const tournamentIdFromUrl = params.get("tournament");
     const editToken = params.get("edit");
 
-    // If this tournament was opened through a shared URL,
-    // require the edit token. No token = view-only.
     if (tournamentIdFromUrl === activeTournament.remoteId) {
       return Boolean(editToken && editToken === activeTournament.adminToken);
     }
 
-    // If opened from your own dashboard/local saved list, allow edit.
     return true;
   }, [activeTournament]);
 
@@ -597,67 +572,67 @@ function App() {
   );
 
   function isMatchEditable(match) {
-  return (
-    isAdmin &&
-    !match.isBye &&
-    match.team1Id &&
-    match.team2Id &&
-    (!match.isComplete || editingMatchIds[match.id])
-  );
-}
-
-function getDraftScores(match) {
-  const draft = scoreDrafts[match.id] || {};
-
-  return {
-    score1: draft.score1 ?? match.score1 ?? "",
-    score2: draft.score2 ?? match.score2 ?? "",
-  };
-}
-
-function updateDraftScore(matchId, field, value) {
-  setScoreDrafts((current) => ({
-    ...current,
-    [matchId]: {
-      ...current[matchId],
-      [field]: value,
-    },
-  }));
-}
-
-function startEditingMatch(match) {
-  if (!isAdmin) {
-    alert("This is a view-only link. Use the admin link to edit scores.");
-    return;
+    return (
+      isAdmin &&
+      !match.isBye &&
+      match.team1Id &&
+      match.team2Id &&
+      (!match.isComplete || editingMatchIds[match.id])
+    );
   }
 
-  setEditingMatchIds((current) => ({
-    ...current,
-    [match.id]: true,
-  }));
+  function getDraftScores(match) {
+    const draft = scoreDrafts[match.id] || {};
 
-  setScoreDrafts((current) => ({
-    ...current,
-    [match.id]: {
-      score1: match.score1 ?? "",
-      score2: match.score2 ?? "",
-    },
-  }));
-}
+    return {
+      score1: draft.score1 ?? match.score1 ?? "",
+      score2: draft.score2 ?? match.score2 ?? "",
+    };
+  }
 
-function cancelEditingMatch(match) {
-  setEditingMatchIds((current) => {
-    const copy = { ...current };
-    delete copy[match.id];
-    return copy;
-  });
+  function updateDraftScore(matchId, field, value) {
+    setScoreDrafts((current) => ({
+      ...current,
+      [matchId]: {
+        ...current[matchId],
+        [field]: value,
+      },
+    }));
+  }
 
-  setScoreDrafts((current) => {
-    const copy = { ...current };
-    delete copy[match.id];
-    return copy;
-  });
-}
+  function startEditingMatch(match) {
+    if (!isAdmin) {
+      alert("This is a view-only link. Use the admin link to edit scores.");
+      return;
+    }
+
+    setEditingMatchIds((current) => ({
+      ...current,
+      [match.id]: true,
+    }));
+
+    setScoreDrafts((current) => ({
+      ...current,
+      [match.id]: {
+        score1: match.score1 ?? "",
+        score2: match.score2 ?? "",
+      },
+    }));
+  }
+
+  function cancelEditingMatch(match) {
+    setEditingMatchIds((current) => {
+      const copy = { ...current };
+      delete copy[match.id];
+      return copy;
+    });
+
+    setScoreDrafts((current) => {
+      const copy = { ...current };
+      delete copy[match.id];
+      return copy;
+    });
+  }
 
   function updateActiveTournament(updater) {
     setTournaments((currentTournaments) => {
@@ -695,7 +670,39 @@ function cancelEditingMatch(match) {
       return nextTournaments;
     });
   }
-  
+
+  async function refreshActiveTournament() {
+    if (!activeTournament?.remoteId) {
+      alert("This tournament is local only.");
+      return;
+    }
+
+    setSyncStatus("Refreshing...");
+
+    const { data, error } = await loadTournamentFromDb(activeTournament.remoteId);
+
+    if (error) {
+      console.error(error);
+      setSyncStatus("Refresh failed");
+      return;
+    }
+
+    const refreshedTournament = {
+      ...data.data,
+      remoteId: data.id,
+      updatedAt: data.updated_at,
+    };
+
+    setTournaments((current) =>
+      current.map((item) =>
+        item.remoteId === activeTournament.remoteId ? refreshedTournament : item
+      )
+    );
+
+    setActiveTournamentId(refreshedTournament.id);
+    setSyncStatus("Loaded latest from Supabase");
+  }
+
   function getShareLink(tournament) {
     if (!tournament?.remoteId) return "";
 
@@ -739,7 +746,7 @@ function cancelEditingMatch(match) {
 
     await navigator.clipboard.writeText(getAdminLink(activeTournament));
     alert("Admin edit link copied.");
-}
+  }
 
   async function handleCreateTournament(event) {
     event.preventDefault();
@@ -809,6 +816,7 @@ function cancelEditingMatch(match) {
         remoteId: data.id,
         updatedAt: data.updated_at,
       };
+
       saveAdminToken(data.id, tournamentWithRemoteId.adminToken);
 
       setTournaments((current) =>
@@ -907,7 +915,7 @@ function cancelEditingMatch(match) {
       delete copy[match.id];
       return copy;
     });
-}
+  }
 
   function changeScoreBy(match, field, delta) {
     if (!isMatchEditable(match)) return;
@@ -917,7 +925,7 @@ function cancelEditingMatch(match) {
     const nextValue = Math.max(0, currentValue + delta);
 
     updateDraftScore(match.id, field, String(nextValue));
-}
+  }
 
   function getVisibleMatches() {
     if (!scoreMode) return matches;
@@ -1217,6 +1225,14 @@ function cancelEditingMatch(match) {
             </button>
 
             <button
+              onClick={refreshActiveTournament}
+              className="secondary-button"
+              disabled={!activeTournament.remoteId}
+            >
+              Refresh
+            </button>
+
+            <button
               onClick={copyShareLink}
               className="secondary-button"
               disabled={!activeTournament.remoteId}
@@ -1230,7 +1246,7 @@ function cancelEditingMatch(match) {
               disabled={!activeTournament.remoteId || !isAdmin}
             >
               Admin Link
-          </button>
+            </button>
 
             <button
               onClick={() => exportTournament(activeTournament)}
