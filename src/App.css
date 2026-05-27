@@ -459,3 +459,25 @@ th {
     text-align: center;
   }
 }
+
+.match-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 12px 0 0;
+}
+
+.match-actions .compact-button {
+  width: auto;
+}
+
+@media (max-width: 800px) {
+  .match-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .match-actions .compact-button {
+    width: 100%;
+  }
+}
