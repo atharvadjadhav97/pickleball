@@ -490,6 +490,8 @@ function App() {
   const [showCompletedMatches, setShowCompletedMatches] = useState(false);
   const [syncStatus, setSyncStatus] = useState("Local only");
   const [isLoadingRemoteTournament, setIsLoadingRemoteTournament] = useState(false);
+  const [scoreDrafts, setScoreDrafts] = useState({});
+  const [editingMatchIds, setEditingMatchIds] = useState({});
 
   const [setup, setSetup] = useState({
     name: "Saturday Pickleball",
@@ -593,6 +595,69 @@ function App() {
     () => getTournamentWinner(activeTournament),
     [activeTournament]
   );
+
+  function isMatchEditable(match) {
+  return (
+    isAdmin &&
+    !match.isBye &&
+    match.team1Id &&
+    match.team2Id &&
+    (!match.isComplete || editingMatchIds[match.id])
+  );
+}
+
+function getDraftScores(match) {
+  const draft = scoreDrafts[match.id] || {};
+
+  return {
+    score1: draft.score1 ?? match.score1 ?? "",
+    score2: draft.score2 ?? match.score2 ?? "",
+  };
+}
+
+function updateDraftScore(matchId, field, value) {
+  setScoreDrafts((current) => ({
+    ...current,
+    [matchId]: {
+      ...current[matchId],
+      [field]: value,
+    },
+  }));
+}
+
+function startEditingMatch(match) {
+  if (!isAdmin) {
+    alert("This is a view-only link. Use the admin link to edit scores.");
+    return;
+  }
+
+  setEditingMatchIds((current) => ({
+    ...current,
+    [match.id]: true,
+  }));
+
+  setScoreDrafts((current) => ({
+    ...current,
+    [match.id]: {
+      score1: match.score1 ?? "",
+      score2: match.score2 ?? "",
+    },
+  }));
+}
+
+function cancelEditingMatch(match) {
+  setEditingMatchIds((current) => {
+    const copy = { ...current };
+    delete copy[match.id];
+    return copy;
+  });
+
+  setScoreDrafts((current) => {
+    const copy = { ...current };
+    delete copy[match.id];
+    return copy;
+  });
+}
 
   function updateActiveTournament(updater) {
     setTournaments((currentTournaments) => {
@@ -765,27 +830,51 @@ function App() {
     });
   }
 
-  function updateMatchScore(matchId, field, value) {
-
+  function submitMatchScore(match) {
     if (!isAdmin) {
       alert("This is a view-only link. Use the admin link to edit scores.");
       return;
     }
+
+    if (match.isBye || !match.team1Id || !match.team2Id) {
+      return;
+    }
+
+    const draftScores = getDraftScores(match);
+    const score1 = String(draftScores.score1).trim();
+    const score2 = String(draftScores.score2).trim();
+
+    if (score1 === "" || score2 === "") {
+      alert("Enter both scores before submitting the match.");
+      return;
+    }
+
+    const numericScore1 = Number(score1);
+    const numericScore2 = Number(score2);
+
+    if (Number.isNaN(numericScore1) || Number.isNaN(numericScore2)) {
+      alert("Scores must be valid numbers.");
+      return;
+    }
+
+    if (numericScore1 === numericScore2) {
+      alert("Scores cannot be tied. Enter a winning score.");
+      return;
+    }
+
+    const winnerId =
+      numericScore1 > numericScore2 ? match.team1Id : match.team2Id;
+
     updateActiveTournament((current) => {
-      const updatedMatches = current.matches.map((match) => {
-        if (match.id !== matchId) return match;
-
-        const updatedMatch = {
-          ...match,
-          [field]: value,
-        };
-
-        const winnerId = calculateWinner(updatedMatch);
+      const updatedMatches = current.matches.map((item) => {
+        if (item.id !== match.id) return item;
 
         return {
-          ...updatedMatch,
+          ...item,
+          score1,
+          score2,
           winnerId,
-          isComplete: Boolean(winnerId),
+          isComplete: true,
         };
       });
 
@@ -806,14 +895,29 @@ function App() {
         matches: finalMatches,
       };
     });
-  }
+
+    setEditingMatchIds((current) => {
+      const copy = { ...current };
+      delete copy[match.id];
+      return copy;
+    });
+
+    setScoreDrafts((current) => {
+      const copy = { ...current };
+      delete copy[match.id];
+      return copy;
+    });
+}
 
   function changeScoreBy(match, field, delta) {
-    const currentValue = Number(match[field] || 0);
+    if (!isMatchEditable(match)) return;
+
+    const draftScores = getDraftScores(match);
+    const currentValue = Number(draftScores[field] || 0);
     const nextValue = Math.max(0, currentValue + delta);
 
-    updateMatchScore(match.id, field, String(nextValue));
-  }
+    updateDraftScore(match.id, field, String(nextValue));
+}
 
   function getVisibleMatches() {
     if (!scoreMode) return matches;
@@ -1255,124 +1359,163 @@ function App() {
         )}
 
         <div className="match-list">
-          {getVisibleMatches().map((match, index) => (
-            <div className="match-card" key={match.id}>
-              <div className="match-header">
-                <div>
-                  <strong>
-                    {scoreMode && match.timeSlot
-                      ? `Slot ${match.timeSlot} · Court ${match.courtNumber || "-"}`
-                      : `Match ${index + 1}`}
-                  </strong>
-                  <p>
-                    {match.day} ·{" "}
-                    {match.stage === "KNOCKOUT"
-                      ? match.roundName
-                      : getStageLabel(match.stage)}
-                    {match.groupName ? ` · ${match.groupName}` : ""}
-                    {match.timeSlot ? ` · Slot ${match.timeSlot}` : ""}
-                    {match.courtNumber ? ` · Court ${match.courtNumber}` : ""}
-                  </p>
+          {getVisibleMatches().map((match, index) => {
+            const draftScores = getDraftScores(match);
+            const canEditThisMatch = isMatchEditable(match);
+
+            return (
+              <div className="match-card" key={match.id}>
+                <div className="match-header">
+                  <div>
+                    <strong>
+                      {scoreMode && match.timeSlot
+                        ? `Slot ${match.timeSlot} · Court ${match.courtNumber || "-"}`
+                        : `Match ${index + 1}`}
+                    </strong>
+                    <p>
+                      {match.day} ·{" "}
+                      {match.stage === "KNOCKOUT"
+                        ? match.roundName
+                        : getStageLabel(match.stage)}
+                      {match.groupName ? ` · ${match.groupName}` : ""}
+                      {match.timeSlot ? ` · Slot ${match.timeSlot}` : ""}
+                      {match.courtNumber ? ` · Court ${match.courtNumber}` : ""}
+                    </p>
+                  </div>
+
+                  {match.isComplete && (
+                    <span className="status-pill">
+                      {match.isBye ? "Bye" : "Complete"}
+                    </span>
+                  )}
                 </div>
 
-                {match.isComplete && (
-                  <span className="status-pill">
-                    {match.isBye ? "Bye" : "Complete"}
-                  </span>
-                )}
-              </div>
+                <div className={scoreMode ? "mobile-score-row" : "score-row"}>
+                  <div className="team-name">{getTeamName(teams, match.team1Id)}</div>
 
-              <div className={scoreMode ? "mobile-score-row" : "score-row"}>
-                <div className="team-name">{getTeamName(teams, match.team1Id)}</div>
+                  {scoreMode ? (
+                    <div className="score-controls">
+                      <button
+                        type="button"
+                        disabled={!canEditThisMatch}
+                        onClick={() => changeScoreBy(match, "score1", -1)}
+                      >
+                        −
+                      </button>
 
-                {scoreMode ? (
-                  <div className="score-controls">
-                    <button
-                      type="button"
-                      disabled={!isAdmin || match.isBye || !match.team1Id || !match.team2Id}
-                      onClick={() => changeScoreBy(match, "score1", -1)}
-                    >
-                      −
-                    </button>
+                      <input
+                        type="number"
+                        value={draftScores.score1}
+                        disabled={!canEditThisMatch}
+                        onChange={(event) =>
+                          updateDraftScore(match.id, "score1", event.target.value)
+                        }
+                      />
 
+                      <button
+                        type="button"
+                        disabled={!canEditThisMatch}
+                        onClick={() => changeScoreBy(match, "score1", 1)}
+                      >
+                        +
+                      </button>
+                    </div>
+                  ) : (
                     <input
                       type="number"
-                      value={match.score1}
-                      disabled={!isAdmin || match.isBye || !match.team1Id || !match.team2Id}
+                      value={draftScores.score1}
+                      disabled={!canEditThisMatch}
                       onChange={(event) =>
-                        updateMatchScore(match.id, "score1", event.target.value)
+                        updateDraftScore(match.id, "score1", event.target.value)
                       }
                     />
+                  )}
+                </div>
 
-                    <button
-                      type="button"
-                      disabled={!isAdmin || match.isBye || !match.team1Id || !match.team2Id}
-                      onClick={() => changeScoreBy(match, "score1", 1)}
-                    >
-                      +
-                    </button>
-                  </div>
-                ) : (
-                  <input
-                    type="number"
-                    value={match.score1}
-                    disabled={!isAdmin || match.isBye || !match.team1Id || !match.team2Id}
-                    onChange={(event) =>
-                      updateMatchScore(match.id, "score1", event.target.value)
-                    }
-                  />
-                )}
-              </div>
+                <div className={scoreMode ? "mobile-score-row" : "score-row"}>
+                  <div className="team-name">{getTeamName(teams, match.team2Id)}</div>
 
-              <div className={scoreMode ? "mobile-score-row" : "score-row"}>
-                <div className="team-name">{getTeamName(teams, match.team2Id)}</div>
+                  {scoreMode ? (
+                    <div className="score-controls">
+                      <button
+                        type="button"
+                        disabled={!canEditThisMatch}
+                        onClick={() => changeScoreBy(match, "score2", -1)}
+                      >
+                        −
+                      </button>
 
-                {scoreMode ? (
-                  <div className="score-controls">
-                    <button
-                      type="button"
-                      disabled={!isAdmin || match.isBye || !match.team1Id || !match.team2Id}
-                      onClick={() => changeScoreBy(match, "score2", -1)}
-                    >
-                      −
-                    </button>
+                      <input
+                        type="number"
+                        value={draftScores.score2}
+                        disabled={!canEditThisMatch}
+                        onChange={(event) =>
+                          updateDraftScore(match.id, "score2", event.target.value)
+                        }
+                      />
 
+                      <button
+                        type="button"
+                        disabled={!canEditThisMatch}
+                        onClick={() => changeScoreBy(match, "score2", 1)}
+                      >
+                        +
+                      </button>
+                    </div>
+                  ) : (
                     <input
                       type="number"
-                      value={match.score2}
-                      disabled={!isAdmin || match.isBye || !match.team1Id || !match.team2Id}
+                      value={draftScores.score2}
+                      disabled={!canEditThisMatch}
                       onChange={(event) =>
-                        updateMatchScore(match.id, "score2", event.target.value)
+                        updateDraftScore(match.id, "score2", event.target.value)
                       }
                     />
+                  )}
+                </div>
 
-                    <button
-                      type="button"
-                      disabled={!isAdmin || match.isBye || !match.team1Id || !match.team2Id}
-                      onClick={() => changeScoreBy(match, "score2", 1)}
-                    >
-                      +
-                    </button>
+                {isAdmin && !match.isBye && match.team1Id && match.team2Id && (
+                  <div className="match-actions">
+                    {match.isComplete && !editingMatchIds[match.id] ? (
+                      <button
+                        type="button"
+                        className="secondary-button compact-button"
+                        onClick={() => startEditingMatch(match)}
+                      >
+                        Edit Match
+                      </button>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          className="primary-button compact-button"
+                          onClick={() => submitMatchScore(match)}
+                        >
+                          {match.isComplete ? "Update Match" : "Submit Match"}
+                        </button>
+
+                        {match.isComplete && (
+                          <button
+                            type="button"
+                            className="secondary-button compact-button"
+                            onClick={() => cancelEditingMatch(match)}
+                          >
+                            Cancel
+                          </button>
+                        )}
+                      </>
+                    )}
                   </div>
-                ) : (
-                  <input
-                    type="number"
-                    value={match.score2}
-                    disabled={!isAdmin || match.isBye || !match.team1Id || !match.team2Id}
-                    onChange={(event) =>
-                      updateMatchScore(match.id, "score2", event.target.value)
-                    }
-                  />
+                )}
+
+                {match.winnerId && (
+                  <p className="winner-line">
+                    Winner: <strong>{getTeamName(teams, match.winnerId)}</strong>
+                  </p>
                 )}
               </div>
-
-              {match.winnerId && (
-                <p className="winner-line">
-                  Winner: <strong>{getTeamName(teams, match.winnerId)}</strong>
-                </p>
-              )}
-            </div>
-          ))}
+            );
+          })}
         </div>
       </section>
     </main>
